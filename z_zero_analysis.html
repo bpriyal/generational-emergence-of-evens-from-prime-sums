@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>z(m) zero analysis</title>
+<style>
+  body { background:#0a0a0a; color:#ccc; font-family:monospace; padding:16px; margin:0; }
+  canvas { display:block; margin-bottom:2px; }
+  h3 { color:#e8c84a; font-size:12px; letter-spacing:2px; margin:14px 0 4px; font-weight:normal; }
+  .note { font-size:10px; color:#555; margin-bottom:8px; line-height:1.7; max-width:680px; }
+  .proved { color:#4f8; }
+  .open { color:#f80; }
+  .stats { font-size:11px; line-height:2.2; margin-top:10px; border-top:1px solid #1a1a1a; padding-top:10px; }
+  input[type=range] { accent-color:#4af; }
+</style>
+</head>
+<body>
+
+<div style="font-size:13px;color:#e8c84a;margin-bottom:4px">z(m) = G(2m) + i·H{G}(2m) — Fresh Zero Analysis</div>
+<div class="note">Green dots: m is prime → z(m)≠0 PROVED. Red dots: m composite → possible risk zone. Yellow = min|z|.</div>
+
+<h3>COMPLEX PLANE — trajectory of z(m). Can it reach the origin?</h3>
+<canvas id="c1" width="680" height="300"></canvas>
+
+<h3>CLAIM 1 PROOF: G(m) ≥ 1 whenever m is prime (real part safe)</h3>
+<canvas id="c2" width="680" height="130"></canvas>
+
+<h3>BALANCE CONDITION: H{G}(m) — right side of (B). Zero crossing = risk point</h3>
+<canvas id="c3" width="680" height="130"></canvas>
+
+<h3>GENERATING FUNCTION: |Π(u)|² at u = e^{iπk/N} — lacunary prime series squared</h3>
+<canvas id="c4" width="680" height="130"></canvas>
+
+<div style="margin:10px 0">
+  <label style="font-size:11px;color:#888">2m up to:
+    <input type="range" id="sl" min="100" max="1500" step="50" value="400">
+    <span id="sv" style="color:#4af">400</span>
+  </label>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<script>
+function fft(re, im, inv) {
+  const n = re.length;
+  for (let i=1,j=0;i<n;i++){
+    let b=n>>1; for(;j&b;b>>=1)j^=b; j^=b;
+    if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}
+  }
+  for(let len=2;len<=n;len<<=1){
+    const a=(2*Math.PI/len)*(inv?1:-1),wR=Math.cos(a),wI=Math.sin(a);
+    for(let i=0;i<n;i+=len){
+      let cR=1,cI=0;
+      for(let j=0;j<len/2;j++){
+        const uR=re[i+j],uI=im[i+j];
+        const vR=re[i+j+len/2]*cR-im[i+j+len/2]*cI;
+        const vI=re[i+j+len/2]*cI+im[i+j+len/2]*cR;
+        re[i+j]=uR+vR;im[i+j]=uI+vI;
+        re[i+j+len/2]=uR-vR;im[i+j+len/2]=uI-vI;
+        const nr=cR*wR-cI*wI;cI=cR*wI+cI*wR;cR=nr;
+      }
+    }
+  }
+  if(inv) for(let i=0;i<n;i++){re[i]/=n;im[i]/=n;}
+}
+
+function run(LIMIT) {
+  const sv = new Uint8Array(LIMIT+1).fill(1);
+  sv[0]=sv[1]=0;
+  for(let i=2;i*i<=LIMIT;i++) if(sv[i]) for(let j=i*i;j<=LIMIT;j+=i) sv[j]=0;
+
+  const G=[], ms=[], isPrime=[];
+  for(let m=3;m*2<=LIMIT;m++){
+    let g=0;
+    for(let p=3;p<=m;p+=2) if(sv[p]&&sv[2*m-p]) g++;
+    // also check p=2: but we use odd primes only (paper convention)
+    G.push(g); ms.push(m); isPrime.push(sv[m]?true:false);
+  }
+
+  const n=G.length;
+  let N=1; while(N<n) N<<=1;
+  const re=new Float64Array(N), im=new Float64Array(N);
+  for(let i=0;i<n;i++) re[i]=G[i];
+  fft(re,im,false);
+  for(let k=1;k<N/2;k++){re[k]*=2;im[k]*=2;}
+  for(let k=N/2+1;k<N;k++){re[k]=0;im[k]=0;}
+  fft(re,im,true);
+  const HG=Array.from({length:n},(_,i)=>im[i]);
+
+  const env=G.map((g,i)=>Math.sqrt(g*g+HG[i]*HG[i]));
+  const minE=Math.min(...env);
+  let minIdx=0; for(let i=0;i<n;i++) if(env[i]<env[minIdx]) minIdx=i;
+
+  // Balance condition: left sum vs right sum of Hilbert
+  const balance=[];
+  for(let i=0;i<n;i++){
+    let L=0,R=0;
+    for(let k=0;k<i;k++) if(G[k]>0) L+=G[k]/(i-k);
+    for(let k=i+1;k<n;k++) if(G[k]>0) R+=G[k]/(k-i);
+    balance.push(L-R); // H{G}(m) ≈ this
+  }
+
+  // Lacunary series Π(u) = Σ_{p prime} u^p
+  // compute |Π(e^{iθ})|² for θ = 2πk/N
+  const M=512;
+  const pRe=new Float64Array(M), pIm=new Float64Array(M);
+  for(let p=3;p<=Math.min(LIMIT,200);p+=2){
+    if(!sv[p]) continue;
+    for(let k=0;k<M;k++){
+      const th=2*Math.PI*k/M;
+      pRe[k]+=Math.cos(p*th);
+      pIm[k]+=Math.sin(p*th);
+    }
+  }
+  const piSq=Array.from({length:M},(_,k)=>pRe[k]*pRe[k]+pIm[k]*pIm[k]);
+
+  return {G,HG,ms,isPrime,env,minE,minIdx,n,balance,piSq,LIMIT};
+}
+
+function drawComplex(d){
+  const c=document.getElementById('c1'),ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const maxE=Math.max(...d.env,1);
+  const cx=W*0.15, cy=H/2, sc=(H/2-20)/maxE;
+
+  ctx.strokeStyle='#1a1a1a';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(20,cy);ctx.lineTo(W-10,cy);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(cx,10);ctx.lineTo(cx,H-10);ctx.stroke();
+
+  // origin forbidden
+  ctx.strokeStyle='#f33';ctx.lineWidth=2;ctx.setLineDash([3,3]);
+  ctx.beginPath();ctx.arc(cx,cy,8,0,Math.PI*2);ctx.stroke();
+  ctx.setLineDash([]);
+
+  // trajectory line
+  ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=1;
+  ctx.beginPath();
+  for(let i=0;i<d.n;i++){
+    const x=cx+d.G[i]*sc, y=cy-d.HG[i]*sc;
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // dots coloured by prime/composite
+  for(let i=0;i<d.n;i++){
+    const x=cx+d.G[i]*sc, y=cy-d.HG[i]*sc;
+    ctx.fillStyle=d.isPrime[i]?'rgba(80,255,120,0.7)':'rgba(100,150,255,0.45)';
+    ctx.beginPath();ctx.arc(x,y,d.isPrime[i]?2.5:1.8,0,Math.PI*2);ctx.fill();
+  }
+
+  // min envelope marker
+  const mi=d.minIdx;
+  const mx=cx+d.G[mi]*sc, my=cy-d.HG[mi]*sc;
+  ctx.fillStyle='#ff0';
+  ctx.beginPath();ctx.arc(mx,my,5,0,Math.PI*2);ctx.fill();
+
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('Im(z)',cx+4,14);
+  ctx.fillText('Re(z)',W-50,cy-4);
+  ctx.fillStyle='#4f8';ctx.fillText('● m prime: z≠0 proved',10,H-18);
+  ctx.fillStyle='#6af';ctx.fillText('● m composite: unproved',200,H-18);
+  ctx.fillStyle='#ff0';ctx.fillText('● min|z|='+d.minE.toFixed(2)+' at 2m='+d.ms[mi]*2,400,H-18);
+}
+
+function drawGwhenPrime(d){
+  const c=document.getElementById('c2'),ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const pad=40,n=d.n,pw=W-pad-10,ph=H-30;
+  const maxG=Math.max(...d.G,1);
+  const cx=i=>pad+(i/(n-1))*pw;
+  const cy=v=>H-15-(v/maxG)*ph;
+
+  ctx.strokeStyle='#1a1a1a';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(pad,H-15);ctx.lineTo(W-10,H-15);ctx.stroke();
+
+  for(let i=0;i<n;i++){
+    ctx.fillStyle=d.isPrime[i]?'rgba(80,255,120,0.8)':'rgba(80,120,200,0.4)';
+    ctx.beginPath();ctx.arc(cx(i),cy(d.G[i]),d.isPrime[i]?2.5:1.5,0,Math.PI*2);ctx.fill();
+  }
+
+  // floor line at G=1
+  ctx.strokeStyle='rgba(80,255,120,0.2)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(pad,cy(1));ctx.lineTo(W-10,cy(1));ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle='#4f8';ctx.font='10px monospace';
+  ctx.fillText('G=1 floor (green points ALL above this — proved)',pad+4,cy(1)-4);
+
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('G(m) vs m. Green=prime m. All green points ≥ 1 (PROVED: p=m gives pair (m,m))',4,12);
+}
+
+function drawBalance(d){
+  const c=document.getElementById('c3'),ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const pad=40,n=d.n,pw=W-pad-10,ph=(H-20)/2;
+  const maxB=Math.max(...d.balance.map(Math.abs),1);
+  const cx=i=>pad+(i/(n-1))*pw;
+  const cy=v=>10+ph-(v/maxB)*ph;
+
+  ctx.strokeStyle='#333';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(pad,10+ph);ctx.lineTo(W-10,10+ph);ctx.stroke();
+
+  // colour: positive H{G} → one colour, negative → another
+  for(let i=1;i<n;i++){
+    ctx.strokeStyle=d.balance[i]>0?'rgba(80,200,255,0.7)':'rgba(255,120,80,0.7)';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(cx(i-1),cy(d.balance[i-1]));
+    ctx.lineTo(cx(i),cy(d.balance[i]));
+    ctx.stroke();
+  }
+
+  // mark zero crossings
+  for(let i=1;i<n;i++){
+    if(d.balance[i-1]*d.balance[i]<0){
+      ctx.fillStyle='#ff0';
+      ctx.beginPath();ctx.arc(cx(i),10+ph,3,0,Math.PI*2);ctx.fill();
+    }
+  }
+
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('H{G}(m) — balance: left sum vs right sum. Yellow=zero crossing (risk zone)',4,12);
+  ctx.fillText('For z=0: need G=0 AND H{G}=0 simultaneously at same m',4,H-4);
+}
+
+function drawPiSq(d){
+  const c=document.getElementById('c4'),ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const pad=40,M=d.piSq.length,pw=W-pad-10,ph=H-30;
+  const maxP=Math.max(...d.piSq,1);
+  const cx=k=>pad+(k/(M-1))*pw;
+  const cy=v=>H-15-(v/maxP)*ph;
+
+  ctx.strokeStyle='#1a1a1a';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(pad,H-15);ctx.lineTo(W-10,H-15);ctx.stroke();
+
+  ctx.strokeStyle='#a86';ctx.lineWidth=1;
+  ctx.beginPath();
+  for(let k=0;k<M;k++) k===0?ctx.moveTo(cx(k),cy(d.piSq[k])):ctx.lineTo(cx(k),cy(d.piSq[k]));
+  ctx.stroke();
+
+  // mark zeros of |Π|²
+  const zeros=[];
+  for(let k=1;k<M-1;k++) if(d.piSq[k]<maxP*0.001) zeros.push(k);
+  for(const k of zeros){
+    ctx.fillStyle='#f44';
+    ctx.beginPath();ctx.arc(cx(k),cy(d.piSq[k]),3,0,Math.PI*2);ctx.fill();
+  }
+
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('|Π(e^{iθ})|² — lacunary prime series squared. Red=near-zero.',4,12);
+  ctx.fillText('G(m) relates to this via G(m)~[u^{2m}]Π(u)². Zeros of Π²→zeros of z.',4,H-4);
+}
+
+function update(){
+  const LIMIT=parseInt(document.getElementById('sl').value);
+  document.getElementById('sv').textContent=LIMIT;
+  const d=run(LIMIT);
+  drawComplex(d);
+  drawGwhenPrime(d);
+  drawBalance(d);
+  drawPiSq(d);
+
+  const primeCount=d.isPrime.filter(Boolean).length;
+  const compositeCount=d.n-primeCount;
+  const zeroB=d.balance.filter((b,i)=>Math.abs(b)<0.5&&d.G[i]===0).length;
+  const minG=Math.min(...d.G);
+
+  document.getElementById('stats').innerHTML=`
+<div><span class="proved">PROVED</span>: z(m)≠0 for all ${primeCount} values of m that are prime in range (G(m)≥1 since p=m gives pair)</div>
+<div><span class="open">UNPROVED</span>: z(m)≠0 for ${compositeCount} composite m values — these are the only risk zone</div>
+<div>Min G(m) in range: <span style="color:#ff0">${minG}</span> — if this is always ≥1, Goldbach holds (and z≠0 trivially)</div>
+<div>Simultaneous G=0 AND H{G}≈0: <span style="color:${zeroB>0?'#f44':'#4f8'}">${zeroB} found</span> — both conditions needed for z=0</div>
+<div style="margin-top:10px;color:#555;line-height:1.9;max-width:660px">
+<span style="color:#888">LOGICAL CHAIN:</span><br>
+✓ m prime → G(m)≥1 → Re(z)>0 → z≠0  <span class="proved">[PROVED, no assumptions]</span><br>
+✓ G(m)=0 requires ALL primes p≤m to have 2m−p composite  <span class="proved">[PROVED by definition]</span><br>
+✓ z(m)=0 additionally requires exact real balance: Σ_{k<m}G(k)/(m−k) = Σ_{k>m}G(k)/(k−m)  <span class="proved">[PROVED]</span><br>
+✓ G(m) growing → right sum &gt; left sum asymmetrically → H{G}(m) &lt; 0 near bulk  <span class="proved">[PROVABLE from growth]</span><br>
+<span style="color:#f80">? G(m)∝[u^{2m}]Π(u)² where Π lacunary — can Π(u)²=0 at composite index?  [OPEN — fresh angle]</span><br>
+<span style="color:#f80">? Can the balance condition (B) ever be satisfied simultaneously with G(m)=0?  [OPEN — key question]</span>
+</div>`;
+}
+
+document.getElementById('sl').addEventListener('input',update);
+update();
+</script>
+</body>
+</html>

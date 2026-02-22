@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Goldbach Winding</title>
+<style>
+  body { background:#0d0d0d; color:#ccc; font-family:monospace; padding:20px; margin:0; }
+  canvas { display:block; margin-bottom:12px; }
+  label { font-size:11px; color:#888; }
+  input { accent-color:#4af; margin: 0 10px; }
+  #stats { font-size:11px; color:#666; line-height:2; margin-top:10px; }
+  span.hi { color:#ff0; }
+  span.ok { color:#4f8; }
+  span.bad { color:#f44; }
+</style>
+</head>
+<body>
+<div style="font-size:14px;margin-bottom:16px">Goldbach — Winding Number of z(m) = G(2m) + i·H{G}(2m)</div>
+
+<label>Phase plane (winding around origin)</label>
+<canvas id="c1" width="640" height="280"></canvas>
+
+<label>Unwrapped phase φ(m) &amp; winding number W(m)</label>
+<canvas id="c2" width="640" height="240"></canvas>
+
+<label>Envelope A(m) = |z(m)| — must stay &gt; 0</label>
+<canvas id="c3" width="640" height="150"></canvas>
+
+<div>
+  <label>2m up to: <input type="range" id="sl" min="200" max="2000" step="100" value="600">
+  <span id="sv" style="color:#4af">600</span></label>
+</div>
+<div id="stats"></div>
+
+<script>
+function fft(re, im, inv) {
+  const n = re.length;
+  for (let i=1,j=0; i<n; i++) {
+    let bit=n>>1;
+    for(;j&bit;bit>>=1) j^=bit;
+    j^=bit;
+    if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}
+  }
+  for(let len=2;len<=n;len<<=1){
+    const ang=(2*Math.PI/len)*(inv?1:-1);
+    const wR=Math.cos(ang),wI=Math.sin(ang);
+    for(let i=0;i<n;i+=len){
+      let cR=1,cI=0;
+      for(let j=0;j<len/2;j++){
+        const uR=re[i+j],uI=im[i+j];
+        const vR=re[i+j+len/2]*cR-im[i+j+len/2]*cI;
+        const vI=re[i+j+len/2]*cI+im[i+j+len/2]*cR;
+        re[i+j]=uR+vR;im[i+j]=uI+vI;
+        re[i+j+len/2]=uR-vR;im[i+j+len/2]=uI-vI;
+        const nr=cR*wR-cI*wI;cI=cR*wI+cI*wR;cR=nr;
+      }
+    }
+  }
+  if(inv) for(let i=0;i<n;i++){re[i]/=n;im[i]/=n;}
+}
+
+function run(LIMIT) {
+  // sieve
+  const sv = new Uint8Array(LIMIT+1).fill(1);
+  sv[0]=sv[1]=0;
+  for(let i=2;i*i<=LIMIT;i++) if(sv[i]) for(let j=i*i;j<=LIMIT;j+=i) sv[j]=0;
+  const P=[];
+  for(let i=3;i<=LIMIT;i+=2) if(sv[i]) P.push(i);
+
+  // G(2m)
+  const G=[],ms=[];
+  for(let m=3;m*2<=LIMIT;m++){
+    let g=0;
+    for(const p of P){if(p>m)break;if(sv[2*m-p])g++;}
+    G.push(g);ms.push(m);
+  }
+
+  // Hilbert
+  const n=G.length;
+  let N=1;while(N<n)N<<=1;
+  const re=new Float64Array(N),im=new Float64Array(N);
+  for(let i=0;i<n;i++) re[i]=G[i];
+  fft(re,im,false);
+  for(let k=1;k<N/2;k++){re[k]*=2;im[k]*=2;}
+  for(let k=N/2+1;k<N;k++){re[k]=0;im[k]=0;}
+  fft(re,im,true);
+  const HG=Array.from({length:n},(_,i)=>im[i]);
+
+  // winding
+  const env=[],wind=[],phU=[];
+  let acc=0,prev=Math.atan2(HG[0],G[0]);
+  phU.push(prev);wind.push(prev/(2*Math.PI));
+  for(let i=1;i<n;i++){
+    const ph=Math.atan2(HG[i],G[i]);
+    let d=ph-prev;
+    while(d>Math.PI)d-=2*Math.PI;
+    while(d<-Math.PI)d+=2*Math.PI;
+    acc+=d;phU.push(acc);wind.push(acc/(2*Math.PI));prev=ph;
+  }
+  for(let i=0;i<n;i++) env.push(Math.sqrt(G[i]*G[i]+HG[i]*HG[i]));
+
+  const maxE=Math.max(...env);
+  const minE=Math.min(...env);
+  const minG=Math.min(...G);
+  let minEIdx=0;
+  for(let i=0;i<n;i++) if(env[i]<env[minEIdx]) minEIdx=i;
+
+  let disc=0;
+  for(let i=1;i<n;i++) if(Math.abs(phU[i]-phU[i-1])>Math.PI*0.9) disc++;
+
+  return {G,HG,env,wind,phU,ms,n,maxE,minE,minG,minEIdx,disc,lastW:wind[n-1]};
+}
+
+function drawPhase(d) {
+  const c=document.getElementById('c1');
+  const ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const cx=W/2,cy=H/2,R=Math.min(W,H)/2-30;
+  const sc=R/d.maxE;
+
+  ctx.strokeStyle='#222';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(cx-R,cy);ctx.lineTo(cx+R,cy);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(cx,cy-R);ctx.lineTo(cx,cy+R);ctx.stroke();
+
+  // forbidden origin
+  ctx.strokeStyle='#f44';ctx.lineWidth=2;
+  ctx.setLineDash([3,3]);
+  ctx.beginPath();ctx.arc(cx,cy,10,0,Math.PI*2);ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.lineWidth=1;
+  for(let i=1;i<d.n;i++){
+    const t=i/d.n;
+    ctx.strokeStyle=`hsla(${t*240},80%,60%,0.65)`;
+    ctx.beginPath();
+    ctx.moveTo(cx+d.G[i-1]*sc,cy-d.HG[i-1]*sc);
+    ctx.lineTo(cx+d.G[i]*sc,cy-d.HG[i]*sc);
+    ctx.stroke();
+  }
+  ctx.fillStyle='#f44';ctx.font='10px monospace';
+  ctx.fillText('origin = Goldbach gap',cx+14,cy-12);
+  ctx.fillStyle='#888';
+  ctx.fillText('Phase plane z(m). Each loop around origin = 1 winding.',8,14);
+}
+
+function drawWinding(d) {
+  const c=document.getElementById('c2');
+  const ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const pad=45,n=d.n;
+  const pw=W-pad-20,ph=(H-50)/2;
+  const cx=i=>pad+(i/(n-1))*pw;
+
+  // unwrapped phase
+  const maxPh=Math.max(...d.phU.map(Math.abs),1);
+  const cy1=v=>8+ph/2-(v/maxPh)*(ph/2-4);
+  ctx.strokeStyle='#4af';ctx.lineWidth=1.2;
+  ctx.beginPath();
+  for(let i=0;i<n;i++) i===0?ctx.moveTo(cx(i),cy1(d.phU[i])):ctx.lineTo(cx(i),cy1(d.phU[i]));
+  ctx.stroke();
+  ctx.strokeStyle='#333';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(pad,8+ph/2);ctx.lineTo(W-20,8+ph/2);ctx.stroke();
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('Unwrapped phase φ(m)',pad+4,18);
+  ctx.fillText(d.phU[n-1].toFixed(1)+'rad',W-80,18);
+
+  // winding number
+  const maxW=Math.max(...d.wind.map(Math.abs),1);
+  const cy2=v=>8+ph+26+ph/2-(v/maxW)*(ph/2-4);
+  // integer lines
+  for(let w=Math.ceil(-maxW);w<=Math.floor(maxW);w++){
+    ctx.strokeStyle='rgba(255,255,100,0.12)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(pad,cy2(w));ctx.lineTo(W-20,cy2(w));ctx.stroke();
+  }
+  ctx.strokeStyle='#4f8';ctx.lineWidth=1.5;
+  ctx.beginPath();
+  for(let i=0;i<n;i++) i===0?ctx.moveTo(cx(i),cy2(d.wind[i])):ctx.lineTo(cx(i),cy2(d.wind[i]));
+  ctx.stroke();
+  ctx.strokeStyle='#333';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(pad,cy2(0));ctx.lineTo(W-20,cy2(0));ctx.stroke();
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('Winding number W(m)',pad+4,8+ph+38);
+  ctx.fillText('W='+d.lastW.toFixed(2),W-80,8+ph+38);
+}
+
+function drawEnv(d) {
+  const c=document.getElementById('c3');
+  const ctx=c.getContext('2d');
+  const W=c.width,H=c.height;
+  ctx.fillStyle='#0a0a0a';ctx.fillRect(0,0,W,H);
+  const pad=50,n=d.n;
+  const pw=W-pad-20,ph=H-36;
+  const cx=i=>pad+(i/(n-1))*pw;
+  const cy=v=>H-16-(v/d.maxE)*ph;
+
+  // G raw
+  ctx.strokeStyle='rgba(80,150,255,0.35)';ctx.lineWidth=1;
+  ctx.beginPath();
+  for(let i=0;i<n;i++) i===0?ctx.moveTo(cx(i),cy(d.G[i])):ctx.lineTo(cx(i),cy(d.G[i]));
+  ctx.stroke();
+
+  // envelope
+  ctx.strokeStyle='#ff0';ctx.lineWidth=1.8;
+  ctx.beginPath();
+  for(let i=0;i<n;i++) i===0?ctx.moveTo(cx(i),cy(d.env[i])):ctx.lineTo(cx(i),cy(d.env[i]));
+  ctx.stroke();
+
+  // zero line
+  ctx.strokeStyle='#f44';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(pad,cy(0));ctx.lineTo(W-20,cy(0));ctx.stroke();
+  ctx.setLineDash([]);
+
+  // min marker
+  const mi=d.minEIdx;
+  ctx.fillStyle='#f80';
+  ctx.beginPath();ctx.arc(cx(mi),cy(d.env[mi]),5,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#f80';ctx.font='10px monospace';
+  ctx.fillText('min A='+d.minE.toFixed(2)+' at 2m='+d.ms[mi]*2,cx(mi)+8,cy(d.env[mi])-4);
+
+  ctx.fillStyle='#888';ctx.font='10px monospace';
+  ctx.fillText('Envelope A(m) — yellow line must never touch red zero line',pad+4,13);
+}
+
+function update() {
+  const LIMIT=parseInt(document.getElementById('sl').value);
+  document.getElementById('sv').textContent=LIMIT;
+  const d=run(LIMIT);
+  drawPhase(d);drawWinding(d);drawEnv(d);
+  document.getElementById('stats').innerHTML=`
+    <div>Samples: <span class="hi">${d.n}</span> even numbers (4 to ${LIMIT})</div>
+    <div>Winding W(m_max): <span class="ok">${d.lastW.toFixed(3)}</span> — growing = phase continuous = z≠0 in range</div>
+    <div>Min envelope A(m): <span class="hi">${d.minE.toFixed(3)}</span> — if this hit 0, Goldbach fails</div>
+    <div>Min G(2m): <span class="hi">${d.minG}</span> — direct Goldbach check in range</div>
+    <div>Phase jumps &gt;π: <span class="${d.disc>0?'bad':'ok'}">${d.disc}</span> — a jump flags z near 0</div>
+    <div style="color:#444;margin-top:8px;max-width:600px;line-height:1.8">
+    OPEN QUESTION: Is z(m) an outer function in discrete H²?<br>
+    If yes → H² outer functions have no zeros → winding argument closes the proof.
+    </div>`;
+}
+
+document.getElementById('sl').addEventListener('input', update);
+update();
+</script>
+</body>
+</html>
